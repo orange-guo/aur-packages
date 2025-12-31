@@ -17,8 +17,8 @@ on:
         default: false
 
 env:
-  AUR_USERNAME: "lbjlaq"
-  AUR_EMAIL: "youremail@example.com"
+  AUR_USERNAME: ${{ secrets.AUR_USERNAME }}
+  AUR_EMAIL: ${{ secrets.AUR_EMAIL }}
 
 jobs:
   # ----------------------------------------------------------------------------

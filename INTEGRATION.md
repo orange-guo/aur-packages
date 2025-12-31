@@ -8,11 +8,13 @@ This repository uses a custom CI pipeline to automate the maintenance of AUR pac
 Ensure your GitHub repository has the following configured:
 
 1.  Go to **Settings** > **Secrets and variables** > **Actions**.
-2.  Add the following **Repository secret**:
+2.  Add the following **Repository secrets** (or variables):
 
-| Secret Name | Description |
-|-------------|-------------|
-| `AUR_SSH_PRIVATE_KEY` | The SSH private key corresponding to the public key uploaded to your AUR account (`https://aur.archlinux.org/account`). |
+| Name | Description | Required |
+|------|-------------|----------|
+| `AUR_SSH_PRIVATE_KEY` | SSH private key for AUR authentication. | **Yes** |
+| `AUR_USERNAME` | Your AUR username (e.g., `lbjlaq`). | **Yes** |
+| `AUR_EMAIL` | Email address for git commits. | **Yes** |
 
 **Note**: The private key must not be encrypted (no passphrase) for automated usage.
 
@@ -25,15 +27,6 @@ Ensure your GitHub repository has the following configured:
 ## 2. Configuration
 
 The pipeline configuration is centralized in two places:
-
-### Global Variables
-Edit `.github/workflows/aur-publish.yml` to set global maintainer information:
-
-```yaml
-env:
-  AUR_USERNAME: "your_aur_username"  # Your username on aur.archlinux.org
-  AUR_EMAIL: "your@email.com"        # Your email for git commits
-```
 
 ### Package Configuration
 The system automatically discovers packages. To add a new package:
