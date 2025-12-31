@@ -34,8 +34,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/${_pkgname}
-WorkingDirectory=/usr/bin
+ExecStart=/usr/bin/${_pkgname} --config %h/.config/cliproxyapi/config.yaml
 Restart=always
 RestartSec=10
 
