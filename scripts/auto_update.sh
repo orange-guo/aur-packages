@@ -92,12 +92,16 @@ fi
 # 1. Try to get variables directly from file (simple parsing)
 get_var() {
     local var_name=$1
-    # Try with quotes first, then without
-    local val=$(grep "^$var_name=" PKGBUILD | cut -d'"' -f2)
-    if [ -z "$val" ]; then
-        val=$(grep "^$var_name=" PKGBUILD | cut -d'=' -f2)
+    local line=$(grep "^$var_name=" PKGBUILD | head -n 1)
+    if [ -z "$line" ]; then
+        return
     fi
-    echo "$val"
+
+    if [[ "$line" == *\"* ]]; then
+        echo "$line" | cut -d'"' -f2
+    else
+        echo "$line" | cut -d'=' -f2
+    fi
 }
 
 REPO_USER=$(get_var "_repouser")
@@ -134,8 +138,29 @@ check_upstream_version() {
         return 1
     fi
 
+    if ! command -v curl &> /dev/null; then
+        log_error "curl is not installed."
+        return 1
+    fi
+
     local api_url="https://api.github.com/repos/$REPO_USER/$REPO_NAME/releases/latest"
-    curl -s "$api_url" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/'
+    local response
+    response=$(curl -sS "$api_url")
+
+    if [ -z "$response" ]; then
+        log_error "Empty response from GitHub API."
+        return 1
+    fi
+
+    local tag=$(echo "$response" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+
+    if [ -z "$tag" ]; then
+        log_error "Could not extract tag_name from response."
+        log_error "Response snippet: $(echo "$response" | head -n 5)"
+        return 1
+    fi
+
+    echo "$tag"
 }
 
 # Run the check

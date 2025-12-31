@@ -61,7 +61,7 @@ case "$COMMAND" in
     install)
         log "Installing dependencies..."
         if [ -f /etc/arch-release ]; then
-            pacman -Syu --noconfirm git openssh pacman-contrib sudo
+            pacman -Syu --noconfirm git openssh pacman-contrib sudo curl jq
         else
             log "Not an Arch system. Skipping pacman install. Ensure dependencies are met manually."
         fi
