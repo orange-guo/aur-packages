@@ -1,0 +1,76 @@
+name: Publish to AUR
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force update'
+        required: false
+        type: boolean
+        default: false
+      dry_run:
+        description: 'Dry run'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  AUR_USERNAME: "lbjlaq"
+  AUR_EMAIL: "youremail@example.com"
+
+jobs:
+  # ----------------------------------------------------------------------------
+  # Phase 1: Discovery
+  # ----------------------------------------------------------------------------
+  discovery:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: set-matrix
+        run: |
+          chmod +x scripts/ci_manager.sh
+          ./scripts/ci_manager.sh discover
+
+  # ----------------------------------------------------------------------------
+  # Phase 2: Execution
+  # ----------------------------------------------------------------------------
+  update:
+    needs: discovery
+    runs-on: ubuntu-latest
+    if: ${{ needs.discovery.outputs.matrix != '{"package": []}' }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.discovery.outputs.matrix) }}
+
+    container:
+      image: archlinux:base-devel
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Unified Environment Setup & Execution
+      - name: Pipeline Execution
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          CI: true
+        run: |
+          chmod +x scripts/ci_manager.sh
+
+          # 1. Install System Dependencies
+          ./scripts/ci_manager.sh install
+
+          # 2. Setup Build User
+          ./scripts/ci_manager.sh setup_user
+
+          # 3. Construct Arguments
+          ARGS=""
+          if [ "${{ inputs.force }}" == "true" ]; then ARGS="$ARGS -f"; fi
+          if [ "${{ inputs.dry_run }}" == "true" ]; then ARGS="$ARGS --dry-run"; fi
+
+          # 4. Run Update
+          ./scripts/ci_manager.sh run_update "${{ matrix.package }}" $ARGS

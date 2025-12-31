@@ -1,0 +1,21 @@
+# Arch Linux Build Artifacts
+*.pkg.tar.zst
+*.pkg.tar.xz
+*.pkg.tar.gz
+*.src.tar.gz
+*.src.tar.xz
+*.src.tar.zst
+*.log
+src/
+pkg/
+*.deb
+
+# Generated metadata (optional, but you kept .SRCINFO so we exclude others)
+.BUILDINFO
+.MTREE
+.PKGINFO
+
+# Temporary files
+*.part
+*.swp
+*~
