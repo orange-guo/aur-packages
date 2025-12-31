@@ -7,6 +7,7 @@ This repository contains my maintained Arch User Repository (AUR) packages. The 
 | Package | Description | Status |
 |---------|-------------|--------|
 | [antigravity-tools-bin](https://aur.archlinux.org/packages/antigravity-tools-bin) | Professional Antigravity Account Manager & Switcher | ![Build Status](https://github.com/orange-guo/aur-packages/actions/workflows/aur-publish.yml/badge.svg) |
+| [cli-proxy-api-bin](https://aur.archlinux.org/packages/cli-proxy-api-bin) | Proxy server providing OpenAI/Gemini/Claude compatible API interfaces | ![Build Status](https://github.com/orange-guo/aur-packages/actions/workflows/aur-publish.yml/badge.svg) |
 
 ## 🛠 Automation Workflow
 
@@ -48,19 +49,11 @@ sudo ./scripts/ci_manager.sh setup_user
 
 ## ➕ Adding a New Package
 
-1.  **Create Directory**: Create a new folder with the package name.
-    ```bash
-    mkdir my-new-package
-    cd my-new-package
-    ```
-2.  **Add PKGBUILD**: Create your `PKGBUILD`.
-    *   *Required Variables*: Ensure `_repouser` and `_reponame` are defined for auto-updates.
-3.  **Commit**: Push the changes.
-    *   **Zero Config**: The CI system will automatically discover the new package directory. You do **NOT** need to edit any YAML files.
+Please refer to [CONTRIBUTING.md](docs/CONTRIBUTING.md) for the standard process of adding and maintaining packages.
 
 ## 🔑 Integration & Secrets
 
-For detailed setup instructions, including required secrets (`AUR_SSH_PRIVATE_KEY`) and global configuration, please refer to [INTEGRATION.md](INTEGRATION.md).
+For detailed setup instructions, including required secrets (`AUR_SSH_PRIVATE_KEY`) and global configuration, please refer to [INTEGRATION.md](docs/INTEGRATION.md).
 
 ---
-*Maintained by [Your Name]*
+*Maintained by [orange-guo](https://github.com/orange-guo)*

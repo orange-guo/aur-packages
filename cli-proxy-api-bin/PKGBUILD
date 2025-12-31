@@ -1,4 +1,5 @@
 # Maintainer: Claude <noreply@anthropic.com>
+# Packaging Repo: https://github.com/orange-guo/aur-packages
 
 pkgname=cli-proxy-api-bin
 _pkgname=cli-proxy-api

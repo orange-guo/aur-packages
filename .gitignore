@@ -6,14 +6,19 @@
 *.src.tar.xz
 *.src.tar.zst
 *.log
-src/
-pkg/
+**/src/
+**/pkg/
 *.deb
 
-# Generated metadata (optional, but you kept .SRCINFO so we exclude others)
+# Generated metadata
+.SRCINFO
 .BUILDINFO
 .MTREE
 .PKGINFO
+
+# OS Generated
+.DS_Store
+Thumbs.db
 
 # Temporary files
 *.part
