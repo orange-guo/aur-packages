@@ -9,3 +9,10 @@ post_install() {
 post_upgrade() {
     post_install
 }
+
+pre_remove() {
+    # Note: We cannot stop user services for all users as we run as root during uninstall.
+    # Users will need to stop their own services or they will stop at next login/reboot.
+    echo ":: Note: You may need to stop the user service manually:"
+    echo "   systemctl --user stop cli-proxy-api.service"
+}
