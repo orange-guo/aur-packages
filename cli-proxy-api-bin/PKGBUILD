@@ -14,6 +14,9 @@ license=('MIT')
 provides=("${pkgname%-bin}")
 conflicts=("${pkgname%-bin}")
 
+# Disable stripping as the binary is pre-compiled and may lack symbols
+options=('!strip')
+
 install=cli-proxy-api-bin.install
 source_x86_64=("${pkgname}-${pkgver}-x86_64.tar.gz::https://github.com/${_repouser}/${_reponame}/releases/download/v${pkgver}/${_reponame}_${pkgver}_linux_amd64.tar.gz")
 sha256sums_x86_64=('6fae2c499b3eb835781b45029de422499dbe8935b89802dc1c07472b7269b452')
