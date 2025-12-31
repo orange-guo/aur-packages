@@ -275,6 +275,11 @@ if [ "$CI" = "true" ] && [ -n "$AUR_SSH_PRIVATE_KEY" ]; then
     log_info "Syncing files..."
     cp PKGBUILD .SRCINFO "$TEMP_AUR_DIR/"
 
+    # Sync install files if present
+    if [ -f "${PKG_NAME}.install" ]; then
+        cp "${PKG_NAME}.install" "$TEMP_AUR_DIR/"
+    fi
+
     # Optional: copy other files if needed (patches, etc.)
     # find . -name "*.patch" -exec cp {} "$TEMP_AUR_DIR/" \;
 
@@ -284,6 +289,9 @@ if [ "$CI" = "true" ] && [ -n "$AUR_SSH_PRIVATE_KEY" ]; then
     git config user.email "$AUR_EMAIL"
 
     git add PKGBUILD .SRCINFO
+    if [ -f "${PKG_NAME}.install" ]; then
+        git add "${PKG_NAME}.install"
+    fi
     # git add *.patch 2>/dev/null || true
 
     if git diff --staged --quiet; then
