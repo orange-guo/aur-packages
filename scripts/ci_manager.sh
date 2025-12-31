@@ -43,7 +43,8 @@ case "$COMMAND" in
             fi
 
             count=${#PACKAGES[@]}
-            json_array=$(printf '%s\n' "${PACKAGES[@]}" | jq -R . | jq -s .)
+            # Use jq -c for compact output (single line) which is required for GITHUB_OUTPUT
+            json_array=$(printf '%s\n' "${PACKAGES[@]}" | jq -R . | jq -sc .)
 
             echo "matrix={\"package\": $json_array}" >> $GITHUB_OUTPUT
 
