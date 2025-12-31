@@ -42,9 +42,18 @@ case "$COMMAND" in
                 sudo apt-get update && sudo apt-get install -y jq || true
             fi
 
+            count=${#PACKAGES[@]}
             json_array=$(printf '%s\n' "${PACKAGES[@]}" | jq -R . | jq -s .)
+
             echo "matrix={\"package\": $json_array}" >> $GITHUB_OUTPUT
-            log "Discovered packages: $json_array"
+
+            if [ "$count" -gt 0 ]; then
+                echo "has_packages=true" >> $GITHUB_OUTPUT
+            else
+                echo "has_packages=false" >> $GITHUB_OUTPUT
+            fi
+
+            log "Discovered $count packages: $json_array"
         fi
         ;;
 

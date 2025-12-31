@@ -28,6 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
+      has_packages: ${{ steps.set-matrix.outputs.has_packages }}
     steps:
       - uses: actions/checkout@v4
 
@@ -42,7 +43,7 @@ jobs:
   update:
     needs: discovery
     runs-on: ubuntu-latest
-    if: ${{ needs.discovery.outputs.matrix != '{"package": []}' }}
+    if: needs.discovery.outputs.has_packages == 'true'
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.discovery.outputs.matrix) }}
