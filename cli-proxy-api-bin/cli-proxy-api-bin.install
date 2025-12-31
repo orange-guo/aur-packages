@@ -1,9 +1,9 @@
 post_install() {
     echo ":: Configuration files are expected in ~/.cli-proxy-api/"
-    echo "   An example config has been installed to /usr/share/doc/cliproxyapi-bin/config.example.yaml"
+    echo "   An example config has been installed to /usr/share/doc/cli-proxy-api-bin/config.example.yaml"
     echo ""
     echo ":: To enable the user service:"
-    echo "   systemctl --user enable --now cliproxyapi.service"
+    echo "   systemctl --user enable --now cli-proxy-api.service"
 }
 
 post_upgrade() {

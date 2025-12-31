@@ -1,6 +1,6 @@
 # Maintainer: Claude <noreply@anthropic.com>
 
-pkgname=cliproxyapi-bin
+pkgname=cli-proxy-api-bin
 _pkgname=cli-proxy-api
 _repouser="router-for-me"
 _reponame="CLIProxyAPI"
@@ -13,7 +13,7 @@ license=('MIT')
 provides=("${pkgname%-bin}")
 conflicts=("${pkgname%-bin}")
 
-install=cliproxyapi-bin.install
+install=cli-proxy-api-bin.install
 source_x86_64=("${pkgname}-${pkgver}-x86_64.tar.gz::https://github.com/${_repouser}/${_reponame}/releases/download/v${pkgver}/${_reponame}_${pkgver}_linux_amd64.tar.gz")
 sha256sums_x86_64=('6fae2c499b3eb835781b45029de422499dbe8935b89802dc1c07472b7269b452')
 sha256sums_aarch64=('7ef23aa5d40483686b1046af242ed34ec0bf815d7c00c9f2bc36b9b26d39407c')
