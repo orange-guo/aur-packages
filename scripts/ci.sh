@@ -122,7 +122,13 @@ aur_publish_discover() {
     fi
     args+=(--failure-policy "${failure_policy}")
 
-    aurpkg detect-updates "${args[@]}"
+    if [ "$(id -u)" -eq 0 ]; then
+        aurpkg setup-user
+    else
+        sudo -n python3 scripts/aurpkg.py setup-user
+    fi
+
+    AURPKG_PACKAGE_CONTROLLED_USER=builder aurpkg detect-updates "${args[@]}"
 }
 
 aur_publish_run() {
@@ -131,8 +137,8 @@ aur_publish_run() {
     local args=()
 
     install_arch_deps
-    aurpkg preflight "${package_arg}"
     aurpkg setup-user
+    aurpkg preflight "${package_arg}"
 
     if [ "${DRY_RUN:-false}" = "true" ]; then
         args+=(--dry-run)
