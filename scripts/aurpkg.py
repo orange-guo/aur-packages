@@ -33,6 +33,17 @@ VALID_PACKAGE_NAME_RE = re.compile(r"^[A-Za-z0-9._+-]+$")
 VALID_COMPONENT_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 VALID_PACKAGE_PATH_RE = re.compile(r"^packages/[A-Za-z0-9._-]+$")
 TEMPLATE_PLACEHOLDER_RE = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_.]*\}|\$[A-Za-z_][A-Za-z0-9_]*")
+SENSITIVE_ENV_NAME_RE = re.compile(r"(?:TOKEN|SECRET|PASSWORD|PRIVATE[_-]?KEY|CREDENTIAL)", re.IGNORECASE)
+SENSITIVE_ENV_NAMES = {
+    "AUR_SSH_PRIVATE_KEY",
+    "AUR_USERNAME",
+    "AUR_EMAIL",
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "GIT_SSH_COMMAND",
+    "SSH_AUTH_SOCK",
+}
+PACKAGE_CONTROLLED_USER_ENV = "AURPKG_PACKAGE_CONTROLLED_USER"
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
@@ -218,6 +229,52 @@ def run(
             detail = f": {result.stderr.strip()}"
         raise CliError(f"Command failed ({result.returncode}): {shlex.join(args)}{detail}")
     return result
+
+
+def sanitized_environment(extra: dict[str, str] | None = None) -> dict[str, str]:
+    """Return an environment suitable for package- or upstream-controlled code."""
+    env = os.environ.copy()
+    if extra:
+        env.update(extra)
+    return {
+        name: value
+        for name, value in env.items()
+        if name not in SENSITIVE_ENV_NAMES and name != PACKAGE_CONTROLLED_USER_ENV and not SENSITIVE_ENV_NAME_RE.search(name)
+    }
+
+
+def run_package_controlled(
+    args: list[str],
+    *,
+    cwd: Path | None = None,
+    check: bool = True,
+    capture: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    env = sanitized_environment()
+    root = os.geteuid() == 0
+    if not root and os.environ.get(PACKAGE_CONTROLLED_USER_ENV) != "builder":
+        return run(args, cwd=cwd, env=env, check=check, capture=capture)
+    if run(["id", "-u", "builder"], check=False, capture=True).returncode != 0:
+        raise CliError("builder user not found; run: python3 scripts/aurpkg.py setup-user")
+    if root:
+        require_cmd("runuser")
+        command = ["runuser", "-u", "builder", "--", "env", "HOME=/home/builder", *args]
+    else:
+        require_cmd("sudo")
+        command = ["sudo", "-n", "-u", "builder", "--", "env", "HOME=/home/builder", *args]
+    return run(
+        command,
+        cwd=cwd,
+        env=env,
+        check=check,
+        capture=capture,
+    )
+
+
+def make_traversable_tempdir() -> Path:
+    path = Path(tempfile.mkdtemp())
+    path.chmod(0o755)
+    return path
 
 
 def retry(description: str, attempts: int, fn: Any) -> Any:
@@ -1583,7 +1640,7 @@ def expand_template(
 
 def curl_bytes(args: list[str]) -> bytes:
     require_cmd("curl")
-    result = subprocess.run(["curl", *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    result = subprocess.run(["curl", *args], env=sanitized_environment(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
     if result.returncode != 0:
         err = result.stderr.decode("utf-8", errors="replace").strip().replace("\n", " ")
         raise CliError(f"curl failed ({result.returncode}): {err}")
@@ -1618,6 +1675,7 @@ def github_api_get_json(api_url: str) -> Any:
                 "%{http_code}",
                 api_url,
             ],
+            env=sanitized_environment(),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -1668,7 +1726,7 @@ def github_asset_match_description_for_arch(pkg: PackageSpec, arch: str) -> str:
     if exact_name:
         return f"exact asset name: {exact_name}"
     selector = github_asset_selector_for_arch(pkg, arch)
-    if selector:
+    if not exact_name and selector:
         return f"regex: {selector}"
     return "<none>"
 
@@ -1687,9 +1745,18 @@ def try_resolve_github_asset_for_arch(pkg: PackageSpec, arch: str, release_json:
         if exact_name and name == exact_name:
             pkg.resolved_source_urls[arch] = asset.get("browser_download_url", "")
             return bool(pkg.resolved_source_urls[arch])
-        if not exact_name and selector and re.search(selector, name):
-            pkg.resolved_source_urls[arch] = asset.get("browser_download_url", "")
-            return bool(pkg.resolved_source_urls[arch])
+    if not exact_name and selector:
+        matches = [
+            asset
+            for asset in release_json.get("assets", [])
+            if asset.get("name", "") and asset.get("browser_download_url", "") and re.search(selector, asset.get("name", ""))
+        ]
+        if len(matches) > 1:
+            names = ", ".join(str(asset["name"]) for asset in matches)
+            raise CliError(f"GitHub release asset regex for {arch} matched multiple assets: {names}")
+        if matches:
+            pkg.resolved_source_urls[arch] = matches[0]["browser_download_url"]
+            return True
     return False
 
 
@@ -1767,6 +1834,7 @@ def resolve_github_release_family_assets(pkg: PackageSpec) -> None:
 def github_fetch_latest_release_url(url: str) -> str:
     result = run(
         ["curl", "-fsSLI", "--retry", "5", "--retry-all-errors", "--retry-delay", "2", "--connect-timeout", "20", "-H", "User-Agent: aur-packages-ci", "-o", "/dev/null", "-w", "%{url_effective}", url],
+        env=sanitized_environment(),
         capture=True,
     )
     return result.stdout.strip()
@@ -1785,24 +1853,14 @@ def resolve_github_release_assets_via_web(pkg: PackageSpec) -> None:
     asset_urls = [f"https://github.com{match}" for match in re.findall(r'href="(/[^\"]+/releases/download/[^\"]+)"', assets_html)]
     if not asset_urls:
         raise CliError("No downloadable assets found on GitHub expanded assets page")
+    release_json = {
+        "assets": [
+            {"name": asset_url.rsplit("/", 1)[-1], "browser_download_url": asset_url}
+            for asset_url in asset_urls
+        ],
+    }
     for arch in pkg.arches:
-        exact_name = github_exact_asset_name_for_arch(pkg, arch)
-        selector = github_asset_selector_for_arch(pkg, arch)
-        if not exact_name and not selector:
-            continue
-        for asset_url in asset_urls:
-            asset_name = asset_url.rsplit("/", 1)[-1]
-            if (exact_name and asset_name == exact_name) or (not exact_name and selector and re.search(selector, asset_name)):
-                pkg.resolved_source_urls[arch] = asset_url
-                break
-        if arch not in pkg.resolved_source_urls:
-            log_error(f"Failed to match GitHub release asset for {arch}")
-            log_error(f"Release tag: {pkg.github_release_tag or 'unknown'}")
-            log_error(f"Regex: {github_asset_match_description_for_arch(pkg, arch)}")
-            log_error("Available assets:")
-            for asset_url in asset_urls:
-                log_error(f"  {asset_url.rsplit('/', 1)[-1]}")
-            raise CliError(f"Failed to match GitHub release asset for {arch}")
+        resolve_github_asset_for_arch(pkg, arch, release_json)
 
 
 def resolve_github_release_assets(pkg: PackageSpec) -> None:
@@ -1920,7 +1978,12 @@ while IFS= read -r var; do
     esac
 done < <(compgen -A variable | sort)
 """
-    result = subprocess.run(["bash", "-c", script], cwd=REPO_ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    result = run_package_controlled(
+        ["bash", "-c", script],
+        cwd=REPO_ROOT,
+        check=False,
+        capture=True,
+    )
     if result.stderr:
         print(result.stderr, end="", file=sys.stderr)
     for line in result.stdout.splitlines():
@@ -2538,11 +2601,11 @@ def prefetch_remote_source(url: str, target_path: Path, srcdest: Path) -> None:
     if partial_path.exists() and partial_path.stat().st_size == 0:
         partial_path.unlink()
     log_info(f"Prefetching source: {target_path.name}")
-    result = subprocess.run(["curl", "-fsSL", "--retry", "20", "--retry-all-errors", "--retry-delay", "2", "--connect-timeout", "20", "-C", "-", "-o", str(partial_path), url], check=False)
+    result = subprocess.run(["curl", "-fsSL", "--retry", "20", "--retry-all-errors", "--retry-delay", "2", "--connect-timeout", "20", "-C", "-", "-o", str(partial_path), url], env=sanitized_environment(), check=False)
     if result.returncode != 0:
         log_info(f"Resume attempt failed for {target_path.name}; retrying from scratch.")
         partial_path.unlink(missing_ok=True)
-        run(["curl", "-fsSL", "--retry", "20", "--retry-all-errors", "--retry-delay", "2", "--connect-timeout", "20", "-o", str(partial_path), url])
+        run(["curl", "-fsSL", "--retry", "20", "--retry-all-errors", "--retry-delay", "2", "--connect-timeout", "20", "-o", str(partial_path), url], env=sanitized_environment())
     if not partial_path.is_file() or partial_path.stat().st_size == 0:
         raise CliError(f"Prefetched source is empty: {target_path.name}")
     partial_path.replace(target_path)
@@ -2585,6 +2648,24 @@ def prepare_workspace_for_build(pkg: PackageSpec, workspace: Path, target_pkgver
     return state
 
 
+def validate_pacman_targets(targets: list[str], context: str) -> list[str]:
+    for target in targets:
+        if target.startswith("-"):
+            raise CliError(f"{context} must not start with '-': {target}")
+    return targets
+
+
+def install_build_dependencies(pkg: PackageSpec, skip_build: bool) -> None:
+    if skip_build:
+        return
+    dependencies: list[str] = []
+    for dependency in [*pkg.depends, *pkg.makedepends, *pkg.checkdepends]:
+        if dependency and dependency not in dependencies:
+            dependencies.append(dependency)
+    if dependencies:
+        run(["pacman", "-S", "--noconfirm", "--needed", "--asdeps", "--", *validate_pacman_targets(dependencies, "package dependency")], env=sanitized_environment())
+
+
 def build_workspace_as_builder(pkg: PackageSpec, workspace: Path, tmp_root: Path, srcdest: Path, pkgdest: Path, skip_build: bool, noninteractive: bool) -> None:
     builder_script = tmp_root / "builder-build.sh"
     script = f"""#!/bin/bash
@@ -2614,7 +2695,7 @@ makepkg --printsrcinfo > .SRCINFO
 if [ {q(skip_build)} = true ]; then
     log_info "Skipping build (--skip-build)"
 else
-    makepkg_opts="-sf"
+    makepkg_opts="-f"
     if [ {q(noninteractive)} = true ]; then
         makepkg_opts="$makepkg_opts --noconfirm"
     fi
@@ -2627,13 +2708,14 @@ fi
     tmp_root.chmod(0o755)
     run(["chown", "builder:builder", str(builder_script)])
     run(["chown", "-R", "builder:builder", str(workspace), str(srcdest), str(pkgdest)])
-    run(["su", "builder", "-c", f"HOME=/home/builder bash {q(str(builder_script))}"])
+    run(
+        ["su", "builder", "-c", f"HOME=/home/builder bash {q(str(builder_script))}"],
+        env=sanitized_environment(),
+    )
 
 
 def build_workspace_as_current_user(pkg: PackageSpec, workspace: Path, srcdest: Path, pkgdest: Path, skip_build: bool, noninteractive: bool) -> None:
-    env = os.environ.copy()
-    env["SRCDEST"] = str(srcdest)
-    env["PKGDEST"] = str(pkgdest)
+    env = sanitized_environment({"SRCDEST": str(srcdest), "PKGDEST": str(pkgdest)})
     ensure_valid_pgp_keys(pkg.validpgpkeys)
     run(["updpkgsums"], cwd=workspace, env=env)
     with (workspace / ".SRCINFO").open("w", encoding="utf-8") as handle:
@@ -2655,6 +2737,7 @@ def build_workspace(pkg: PackageSpec, workspace: Path, tmp_root: Path, srcdest: 
     if os.geteuid() == 0:
         if run(["id", "-u", "builder"], check=False, capture=True).returncode != 0:
             raise CliError("builder user not found; run: python3 scripts/aurpkg.py setup-user")
+        install_build_dependencies(pkg, skip_build)
         build_workspace_as_builder(pkg, workspace, tmp_root, srcdest, pkgdest, skip_build, noninteractive)
     else:
         build_workspace_as_current_user(pkg, workspace, srcdest, pkgdest, skip_build, noninteractive)
@@ -2714,7 +2797,7 @@ def run_smoke_checks(pkg: PackageSpec) -> None:
     for test_command in pkg.test_commands:
         if test_command:
             log_info(f"Running smoke-test command: {test_command}")
-            run(["bash", "-lc", test_command])
+            run_package_controlled(["bash", "-lc", test_command])
 
 
 def install_and_verify_workspace(pkg: PackageSpec, workspace: Path) -> None:
@@ -2725,7 +2808,7 @@ def install_and_verify_workspace(pkg: PackageSpec, workspace: Path) -> None:
         raise CliError("No built package files were produced")
     log_group_start("Install Package")
     try:
-        run(["pacman", "-U", "--noconfirm", *package_files])
+        run(["pacman", "-U", "--noconfirm", "--", *package_files])
         run_smoke_checks(pkg)
         log_info(f"Package install smoke tests passed: {pkg.name}")
     finally:
@@ -2738,7 +2821,7 @@ def install_and_verify_workspace(pkg: PackageSpec, workspace: Path) -> None:
 
 def fetch_http_status_with_retry(url: str) -> str:
     require_cmd("curl")
-    result = run(["curl", "-sS", "-L", "--retry", os.environ.get("HTTP_STATUS_RETRY_ATTEMPTS", "10"), "--retry-all-errors", "--retry-delay", "2", "--connect-timeout", "20", "-o", "/dev/null", "-w", "%{http_code}", url], capture=True)
+    result = run(["curl", "-sS", "-L", "--retry", os.environ.get("HTTP_STATUS_RETRY_ATTEMPTS", "10"), "--retry-all-errors", "--retry-delay", "2", "--connect-timeout", "20", "-o", "/dev/null", "-w", "%{http_code}", url], env=sanitized_environment(), capture=True)
     return result.stdout.strip()
 
 
@@ -2760,7 +2843,7 @@ def prepare_aur_ssh(temp_paths: list[Path]) -> tuple[Path, Path]:
 
     def fetch_key() -> None:
         with known_hosts_file.open("w", encoding="utf-8") as handle:
-            result = subprocess.run(["ssh-keyscan", "-t", "ed25519", AUR_SSH_HOST], stdout=handle, stderr=subprocess.DEVNULL, check=False)
+            result = subprocess.run(["ssh-keyscan", "-t", "ed25519", AUR_SSH_HOST], env=sanitized_environment(), stdout=handle, stderr=subprocess.DEVNULL, check=False)
         if result.returncode != 0:
             raise CliError("ssh-keyscan failed")
 
@@ -3244,11 +3327,19 @@ def ensure_builder_user() -> None:
         run(["useradd", "-m", "builder"])
 
 
+def artifact_makedepends(artifact: PackageArtifact) -> list[str]:
+    return validate_pacman_targets(
+        artifact.makedepends or ["ca-certificates", "curl", "git", "patch", "rust", "tar"],
+        "artifact makedepends",
+    )
+
+
 def build_artifact_cargo_direct(pkg: PackageSpec, artifact: PackageArtifact, arch: str, asset_path: Path) -> None:
     require_cmd("pacman")
     require_cmd("runuser")
     if os.geteuid() != 0:
         raise CliError("direct artifact preparation must run as root")
+    makedepends = artifact_makedepends(artifact)
     tmp_root = Path(tempfile.mkdtemp())
     try:
         tmp_root.chmod(0o755)
@@ -3258,7 +3349,7 @@ def build_artifact_cargo_direct(pkg: PackageSpec, artifact: PackageArtifact, arc
         build_dir.mkdir()
         output_dir.mkdir()
         asset_path.parent.mkdir(parents=True, exist_ok=True)
-        run(["pacman", "-Syu", "--noconfirm", "--needed", *(artifact.makedepends or ["ca-certificates", "curl", "git", "patch", "rust", "tar"])])
+        run(["pacman", "-Syu", "--noconfirm", "--needed", "--", *makedepends], env=sanitized_environment())
         ensure_builder_user()
         run(["chown", "-R", "builder:builder", str(build_dir), str(output_dir)])
         source_url = artifact_source_archive_url(artifact)
@@ -3269,7 +3360,11 @@ def build_artifact_cargo_direct(pkg: PackageSpec, artifact: PackageArtifact, arc
         )
         builder_script.chmod(0o755)
         log_info(f"Building artifact {artifact.name} {artifact.resolved_version} ({arch}) in current Arch environment")
-        run(["runuser", "-u", "builder", "--", "env", "HOME=/home/builder", "/bin/bash", str(builder_script)], cwd=build_dir)
+        run(
+            ["runuser", "-u", "builder", "--", "env", "HOME=/home/builder", "/bin/bash", str(builder_script)],
+            cwd=build_dir,
+            env=sanitized_environment(),
+        )
         archive_destinations = [spec.split(":", 2)[1] for spec in artifact.archive_files]
         run(["tar", "-C", str(output_dir), "-czf", str(asset_path), *archive_destinations])
     finally:
@@ -3283,6 +3378,7 @@ def build_artifact_cargo(pkg: PackageSpec, artifact: PackageArtifact, arch: str,
         build_artifact_cargo_direct(pkg, artifact, arch, asset_path)
         return
     runtime = detect_container_runtime()
+    makedepends = artifact_makedepends(artifact)
     tmp_root = Path(tempfile.mkdtemp())
     try:
         output_dir = tmp_root / "output"
@@ -3294,9 +3390,9 @@ def build_artifact_cargo(pkg: PackageSpec, artifact: PackageArtifact, arch: str,
         source_dir = artifact_source_dir(pkg, artifact)
         container_script.write_text(f"""#!/bin/bash
 set -e
-{render_array_assignment("ARTIFACT_MAKEDEPENDS", artifact.makedepends or ['ca-certificates', 'curl', 'git', 'patch', 'rust', 'tar'])}
+{render_array_assignment("ARTIFACT_MAKEDEPENDS", makedepends)}
 
-pacman -Syu --noconfirm --needed "${{ARTIFACT_MAKEDEPENDS[@]}}"
+pacman -Syu --noconfirm --needed -- "${{ARTIFACT_MAKEDEPENDS[@]}}"
 
 if ! id -u builder >/dev/null 2>&1; then
     useradd -m builder
@@ -3331,7 +3427,7 @@ chown -R "${{HOST_UID}}:${{HOST_GID}}" /output
             image,
             "bash",
             "/container.sh",
-        ])
+        ], env=sanitized_environment())
         archive_destinations = [spec.split(":", 2)[1] for spec in artifact.archive_files]
         run(["tar", "-C", str(output_dir), "-czf", str(asset_path), *archive_destinations])
     finally:
@@ -3474,7 +3570,7 @@ def command_run_publish(args: list[str]) -> int:
     temp_paths: list[Path] = []
     tmp_root_path: Path | None = None
     try:
-        tmp_root_path = Path(tempfile.mkdtemp())
+        tmp_root_path = make_traversable_tempdir()
         aur_dir = tmp_root_path / "aur"
         srcdest = tmp_root_path / "srcdest"
         pkgdest = tmp_root_path / "pkgdest"
@@ -3483,9 +3579,7 @@ def command_run_publish(args: list[str]) -> int:
         ssh_files: tuple[Path, Path] | None = None
         log_group_start(f"Initialization: {pkg.rel_dir}")
         try:
-            if os.environ.get("CI", "false") == "true" and os.environ.get("AUR_SSH_PRIVATE_KEY"):
-                ssh_files = prepare_aur_ssh(temp_paths)
-            prepare_aur_repo(pkg, aur_dir, ssh_files)
+            prepare_aur_repo(pkg, aur_dir, None)
             load_aur_state(pkg)
             log_info(f"Package: {pkg.name}")
             log_info(f"Template: {pkg.template}")
@@ -3519,6 +3613,8 @@ def command_run_publish(args: list[str]) -> int:
             install_and_verify_workspace(pkg, final_workspace)
         log_group_start("Publish to AUR")
         try:
+            if not dry_run and os.environ.get("CI", "false") == "true" and os.environ.get("AUR_SSH_PRIVATE_KEY"):
+                ssh_files = prepare_aur_ssh(temp_paths)
             publish_to_aur(pkg, target_pkgver, target_pkgrel, dry_run, ssh_files)
         finally:
             log_group_end()
@@ -3567,7 +3663,7 @@ def run_package_validation_direct(args: list[str]) -> int:
     require_cmd("pacman")
     pkg_input, artifact_mode = parse_run_test_args(args)
     pkg = load_package(pkg_input)
-    tmp_root = Path(tempfile.mkdtemp())
+    tmp_root = make_traversable_tempdir()
     try:
         srcdest = tmp_root / "srcdest"
         pkgdest = tmp_root / "pkgdest"
@@ -3611,6 +3707,10 @@ def detect_container_runtime() -> str:
     raise CliError("docker or podman is required for local package tests")
 
 
+def container_token_environment_args() -> list[str]:
+    return ["-e", "GITHUB_TOKEN", "-e", "GH_TOKEN"]
+
+
 def command_run_test(args: list[str]) -> int:
     pkg_input, artifact_mode = parse_run_test_args(args)
     pkg_dir = canonical_package_dir(pkg_input)
@@ -3634,10 +3734,7 @@ def command_run_test(args: list[str]) -> int:
         "--rm",
         "-e",
         "CI=true",
-        "-e",
-        f"GITHUB_TOKEN={os.environ.get('GITHUB_TOKEN', '')}",
-        "-e",
-        f"GH_TOKEN={os.environ.get('GH_TOKEN', '')}",
+        *container_token_environment_args(),
         "-v",
         f"{REPO_ROOT}:/src:ro",
         image,
@@ -3881,7 +3978,7 @@ def command_prepare_artifacts(args: list[str]) -> int:
     if not pkg.artifacts:
         log_info(f"Package has no declared artifacts: {pkg.name}")
         return 0
-    tmp_root = Path(tempfile.mkdtemp())
+    tmp_root = make_traversable_tempdir()
     try:
         srcdest = tmp_root / "srcdest"
         srcdest.mkdir()
@@ -3904,6 +4001,10 @@ def command_preflight(args: list[str]) -> int:
     return 0
 
 
+def remove_builder_sudoers(sudoers: Path = Path("/etc/sudoers.d/builder")) -> None:
+    sudoers.unlink(missing_ok=True)
+
+
 def command_setup_user(args: list[str]) -> int:
     if args:
         raise CliError(f"Unknown setup-user parameter: {args[0]}")
@@ -3914,10 +4015,7 @@ def command_setup_user(args: list[str]) -> int:
         run(["useradd", "-m", "builder"])
     else:
         log_cli("User 'builder' already exists.")
-    sudoers = Path("/etc/sudoers.d/builder")
-    if not sudoers.is_file():
-        sudoers.write_text("builder ALL=(ALL) NOPASSWD: ALL\n", encoding="utf-8")
-        sudoers.chmod(0o440)
+    remove_builder_sudoers()
     return 0
 
 

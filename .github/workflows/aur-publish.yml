@@ -33,12 +33,10 @@ on:
         default: auto
 
 env:
-  AUR_USERNAME: ${{ secrets.AUR_USERNAME }}
-  AUR_EMAIL: ${{ secrets.AUR_EMAIL }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: aur-publish
@@ -62,6 +60,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Restore upstream detector cache
         uses: actions/cache/restore@v4
@@ -100,6 +99,8 @@ jobs:
     name: Publish ${{ matrix.package }} to AUR
     needs: discovery
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     if: needs.discovery.outputs.has_packages == 'true'
     strategy:
       fail-fast: false
@@ -118,11 +119,15 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       # Unified Environment Setup & Execution
       - name: Build and publish package
         env:
           AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          AUR_USERNAME: ${{ secrets.AUR_USERNAME }}
+          AUR_EMAIL: ${{ secrets.AUR_EMAIL }}
           CI: true
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
           GH_TOKEN: ${{ github.token }}
